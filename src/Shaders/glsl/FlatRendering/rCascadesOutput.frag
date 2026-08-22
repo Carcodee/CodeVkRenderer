@@ -57,7 +57,7 @@ vec4 CastInterval(vec2 intervalStart, vec2 intervalEnd, int cascadeIndex, vec2 f
     for (int i = 0; i < maxSteps; i++){
         vec2 textCoordPos = vec2(pos)/ vec2(fSize);
         vec4 sampleCol= imageLoad(PaintingLayers[0], ivec2(pos));
-        vec4 simulationCol= imageLoad(PaintingLayers[4], ivec2(pos));
+        vec4 simulationCol= imageLoad(PaintingLayers[3], ivec2(pos));
         vec4 ocluddersFinded= imageLoad(Radiances[0], ivec2(pos));
         vec4 sampleColImage= texture(TestImage,textCoordPos);
 

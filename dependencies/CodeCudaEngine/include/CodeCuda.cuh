@@ -118,8 +118,8 @@ namespace CodeCuda
     // simulation
     namespace FluidSimulation
     {
-        inline int s_width = 764;
-        inline int s_height = 764;
+        inline int s_width = 256 + 128;
+        inline int s_height = 256 + 128;
         //used to map simulation to external buffers
         kernel_launcher& C_GetKernelLauncherMappers(int type);
         C_Res C_UpdateSimGPU(CodeCudaContext *code_cuda_context);

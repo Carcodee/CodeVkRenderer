@@ -773,15 +773,27 @@ class ImguiRenderer
 			return;
 		}
 
-		auto randomPrettyColor = []() {
-			return glm::vec4(
-			    glm::linearRand(0.02f, 0.35f),
-			    glm::linearRand(0.02f, 0.35f),
-			    glm::linearRand(0.05f, 0.45f),
-			    glm::linearRand(0.05f, 0.45f));
+		auto randomPrettyColor = [this]() {
+			float baseHue        = 0.0f;
+			float baseSaturation = 0.0f;
+			float baseValue      = 0.0f;
+			ImGui::ColorConvertRGBtoHSV(prettySmokeBaseColor[0], prettySmokeBaseColor[1],
+			                            prettySmokeBaseColor[2], baseHue, baseSaturation, baseValue);
+
+			float hue = baseHue + glm::linearRand(-prettySmokeColorSpread, prettySmokeColorSpread);
+			hue -= glm::floor(hue);
+			const float saturation = glm::clamp(baseSaturation * glm::linearRand(0.82f, 1.12f), 0.0f, 1.0f);
+			const float value      = glm::clamp(baseValue * glm::linearRand(0.82f, 1.12f), 0.0f, 1.0f);
+
+			glm::vec4 color(0.0f, 0.0f, 0.0f,
+			                glm::clamp(prettySmokeOpacity * glm::linearRand(0.82f, 1.08f), 0.0f, 1.0f));
+			ImGui::ColorConvertHSVtoRGB(hue, saturation, value, color.r, color.g, color.b);
+			return color;
 		};
 
-		const int radius = std::max(1, CodeCuda::FluidSimulation::s_height / 46);
+		const int maxSimulationDimension =
+		    std::max(CodeCuda::FluidSimulation::s_width, CodeCuda::FluidSimulation::s_height);
+		const int radius = std::clamp(prettySmokeBrushRadius, 1, maxSimulationDimension);
 		if (!prettySmokeStrokeActive)
 		{
 			prettySmokeLastMousePosition = mousePosition;
@@ -789,17 +801,24 @@ class ImguiRenderer
 			prettySmokeStrokeActive      = true;
 		}
 
-		const glm::vec2 mouseDelta    = mousePosition - prettySmokeLastMousePosition;
-		const float     distance      = glm::length(mouseDelta);
-		const float     sampleSpacing = std::max(1.0f, static_cast<float>(radius) * 0.35f);
-		const int       sampleCount   = std::max(1, static_cast<int>(glm::ceil(distance / sampleSpacing)));
-		const glm::vec4 newColor      = randomPrettyColor();
+		const glm::vec2 mouseDelta      = mousePosition - prettySmokeLastMousePosition;
+		const float     distance        = glm::length(mouseDelta);
+		const float     spacingScale    = glm::mix(1.0f, 0.12f, prettySmokeTrailSmoothness);
+		const float     sampleSpacing   = std::max(1.0f, static_cast<float>(radius) * spacingScale);
+		const int       sampleCount     = std::max(1, static_cast<int>(glm::ceil(distance / sampleSpacing)));
+		const glm::vec4 newColor        = randomPrettyColor();
+		const glm::vec2 strokeDirection = distance > 0.001f ? mouseDelta / distance : glm::vec2(0.0f);
+		const glm::vec2 strokeNormal(-strokeDirection.y, strokeDirection.x);
+		const float     coordinateScale =
+		    1023.0f / static_cast<float>(std::max(1, maxSimulationDimension));
 
 		for (int sample = 1; sample <= sampleCount; ++sample)
 		{
-			const float     t = static_cast<float>(sample) / static_cast<float>(sampleCount);
+			const float t      = static_cast<float>(sample) / static_cast<float>(sampleCount);
+			const float jitter = glm::linearRand(-1.0f, 1.0f) * prettySmokeTurbulence *
+			                     static_cast<float>(radius) * coordinateScale;
 			const glm::vec2 interpolatedPosition =
-			    glm::mix(prettySmokeLastMousePosition, mousePosition, t);
+			    glm::mix(prettySmokeLastMousePosition, mousePosition, t) + strokeNormal * jitter;
 			const float     smoothT = t * t * (3.0f - 2.0f * t);
 			const glm::vec4 interpolatedColor =
 			    glm::mix(prettySmokeLastColor, newColor, smoothT);
@@ -810,12 +829,18 @@ class ImguiRenderer
 			const int   y = static_cast<int>((1.0f - v) * static_cast<float>(CodeCuda::FluidSimulation::s_height - 1));
 
 			const glm::vec2 simulationDelta(
-			    mouseDelta.x * static_cast<float>(CodeCuda::FluidSimulation::s_width) / 1023.0f,
-			    mouseDelta.y * static_cast<float>(CodeCuda::FluidSimulation::s_height) / 1023.0f);
+			    mouseDelta.x * static_cast<float>(CodeCuda::FluidSimulation::s_width) /
+			        (1023.0f * static_cast<float>(sampleCount)),
+			    mouseDelta.y * static_cast<float>(CodeCuda::FluidSimulation::s_height) /
+			        (1023.0f * static_cast<float>(sampleCount)));
+			const glm::vec2 curlVelocity(-simulationDelta.y, simulationDelta.x);
+			const glm::vec2 velocity =
+			    simulationDelta * prettySmokeFlowStrength +
+			    curlVelocity * (glm::linearRand(-1.0f, 1.0f) * prettySmokeTurbulence *
+			                    prettySmokeFlowStrength);
 
 			CodeCuda::FluidSimulation::C_AddVelocityGPU(x, y, radius,
-			                                            simulationDelta.x * 0.2f,
-			                                            -simulationDelta.y * 0.2f, context);
+			                                            velocity.x, -velocity.y, context);
 			CodeCuda::FluidSimulation::C_AddSmokeGPU(x, y, radius,
 			                                         interpolatedColor.r, interpolatedColor.g,
 			                                         interpolatedColor.b, interpolatedColor.a, context);
@@ -1199,7 +1224,7 @@ class ImguiRenderer
 		    "Remove solid obstacles from the simulation.",
 		    "Push fluid outward from the cursor.",
 		    "Place a persistent smoke and velocity source.",
-		    "Paint a smooth trail with changing random colors.",
+		    "Paint a smooth, colorful trail that responds to your stroke.",
 		    "Add signed pressure inside the brush area."};
 
 		const int maxSimulationDimension =
@@ -1297,8 +1322,90 @@ class ImguiRenderer
 			}
 			else if (fluidTool == 6)
 			{
-				beginProperty("Style");
-				ImGui::TextDisabled("Interpolated random color");
+				if (!fluidToolEnabled)
+				{
+					beginProperty("Pretty smoke");
+					ImGui::TextDisabled("Enable the tool to tune its trail.");
+				}
+				else
+				{
+					const char *prettySmokePresets[] = {"Nebula", "Aurora", "Ember", "Rainbow", "Custom"};
+					beginProperty("Palette");
+					if (ImGui::Combo("##pretty_smoke_palette", &prettySmokePreset,
+					                 prettySmokePresets, IM_ARRAYSIZE(prettySmokePresets)))
+					{
+						switch (prettySmokePreset)
+						{
+							case 0:
+								prettySmokeBaseColor[0] = 0.34f;
+								prettySmokeBaseColor[1] = 0.08f;
+								prettySmokeBaseColor[2] = 0.90f;
+								prettySmokeOpacity      = 0.30f;
+								prettySmokeColorSpread  = 0.10f;
+								prettySmokeTurbulence   = 0.18f;
+								break;
+							case 1:
+								prettySmokeBaseColor[0] = 0.04f;
+								prettySmokeBaseColor[1] = 0.86f;
+								prettySmokeBaseColor[2] = 0.56f;
+								prettySmokeOpacity      = 0.28f;
+								prettySmokeColorSpread  = 0.18f;
+								prettySmokeTurbulence   = 0.24f;
+								break;
+							case 2:
+								prettySmokeBaseColor[0] = 1.00f;
+								prettySmokeBaseColor[1] = 0.14f;
+								prettySmokeBaseColor[2] = 0.02f;
+								prettySmokeOpacity      = 0.36f;
+								prettySmokeColorSpread  = 0.045f;
+								prettySmokeTurbulence   = 0.12f;
+								break;
+							case 3:
+								prettySmokeBaseColor[0] = 1.00f;
+								prettySmokeBaseColor[1] = 0.12f;
+								prettySmokeBaseColor[2] = 0.30f;
+								prettySmokeOpacity      = 0.30f;
+								prettySmokeColorSpread  = 0.50f;
+								prettySmokeTurbulence   = 0.22f;
+								break;
+							default:
+								break;
+						}
+					}
+
+					beginProperty("Base color");
+					if (ImGui::ColorEdit3("##pretty_smoke_base_color", prettySmokeBaseColor))
+					{
+						prettySmokePreset = 4;
+					}
+					beginProperty("Opacity");
+					if (ImGui::DragFloat("##pretty_smoke_opacity", &prettySmokeOpacity,
+					                     0.01f, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+					{
+						prettySmokePreset = 4;
+					}
+					beginProperty("Brush radius");
+					ImGui::DragInt("##pretty_smoke_brush_radius", &prettySmokeBrushRadius,
+					               1.0f, 1, maxBrushRadius, "%d px", ImGuiSliderFlags_AlwaysClamp);
+					beginProperty("Flow strength");
+					ImGui::DragFloat("##pretty_smoke_flow_strength", &prettySmokeFlowStrength,
+					                 0.01f, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+					beginProperty("Color spread");
+					if (ImGui::DragFloat("##pretty_smoke_color_spread", &prettySmokeColorSpread,
+					                     0.005f, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp))
+					{
+						prettySmokePreset = 4;
+					}
+					beginProperty("Trail smoothness");
+					ImGui::SliderFloat("##pretty_smoke_trail_smoothness", &prettySmokeTrailSmoothness,
+					                   0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+					beginProperty("Turbulence");
+					if (ImGui::SliderFloat("##pretty_smoke_turbulence", &prettySmokeTurbulence,
+					                       0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+					{
+						prettySmokePreset = 4;
+					}
+				}
 			}
 			else if (fluidTool == 7)
 			{
@@ -1327,8 +1434,7 @@ class ImguiRenderer
 		const float  viewportWidth     = std::max(1.0f, sceneViewportMax.x - sceneViewportMin.x);
 		const float  viewportHeight    = std::max(1.0f, sceneViewportMax.y - sceneViewportMin.y);
 		const bool   mouseOverViewport = sceneViewportValid && sceneViewportHovered;
-		const int    activeBrushRadius =
-            fluidTool == 6 ? std::max(1, CodeCuda::FluidSimulation::s_height / 46) : fluidBrushRadius;
+		const int    activeBrushRadius = fluidTool == 6 ? prettySmokeBrushRadius : fluidBrushRadius;
 		if (fluidToolEnabled && mouseOverViewport)
 		{
 			const float radiusPixels = std::max(
@@ -2522,7 +2628,15 @@ class ImguiRenderer
 	bool                                                  inspectorPanelResizing = false;
 	glm::vec2                                             prettySmokeLastMousePosition{};
 	glm::vec4                                             prettySmokeLastColor{0.15f, 0.05f, 0.25f, 1.0f};
-	bool                                                  prettySmokeStrokeActive = false;
+	bool                                                  prettySmokeStrokeActive    = false;
+	float                                                 prettySmokeBaseColor[3]    = {0.34f, 0.08f, 0.90f};
+	float                                                 prettySmokeOpacity         = 0.30f;
+	float                                                 prettySmokeColorSpread     = 0.10f;
+	float                                                 prettySmokeFlowStrength    = 0.20f;
+	float                                                 prettySmokeTrailSmoothness = 0.74f;
+	float                                                 prettySmokeTurbulence      = 0.18f;
+	int                                                   prettySmokeBrushRadius     = 18;
+	int                                                   prettySmokePreset          = 0;
 
 	std::unique_ptr<ImguiDsetsArray> dsetsArrays;
 	std::vector<LayoutPatterns>      layoutPatternsToRecover;
