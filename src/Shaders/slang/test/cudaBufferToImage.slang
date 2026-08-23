@@ -21,7 +21,7 @@ float3 ColorMapSpeed(float speed)
     float t = saturate(speed / maxVisualSpeed);
 
     // Expands low and medium speeds while still preserving high-speed detail.
-    t = pow(t, 0.55f);
+    t = pow(t, 0.85f);
 
     // Black-blue -> blue -> cyan -> green -> yellow -> orange -> red
     if (t < 0.12f)
@@ -135,9 +135,9 @@ void mainCS(uint3 dtid : SV_DispatchThreadID) {
   alpha = 1.0f - exp(-density * 0.25f);
 
   if (density < 0) {
-      valueInterp = 1.0;
-      value = float4(0.0, 0.1, 0.0, 1.0);
-      alpha = 1.0;
+ //     valueInterp = 1.0;
+ //     value = float4(0.0, 0.1, 0.0, 1.0);
+//      alpha = 1.0;
   };
   // Optional cap so it never becomes completely opaque
   
